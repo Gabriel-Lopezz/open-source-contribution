@@ -3699,7 +3699,6 @@ class MultiIndex(Index):
 
         kind = getattr(dt, "kind", None)
 
-        # object levels: don't enforce type (too many valid mixes)
         if kind == "O":
             return True
 
@@ -3713,7 +3712,7 @@ class MultiIndex(Index):
             import datetime as _dt
             return isinstance(val, (np.timedelta64, _dt.timedelta, pd.Timedelta, str))
 
-        # numeric-ish levels
+        # numeric-like levels
         if kind in ("i", "u"):
             return isinstance(val, (int, np.integer))
         if kind == "f":
@@ -3721,11 +3720,11 @@ class MultiIndex(Index):
         if kind == "b":
             return isinstance(val, (bool, np.bool_))
 
-        # string-ish
+        # string-like level
         if kind in ("U", "S"):
             return isinstance(val, str)
 
-        # default: don't block
+        # By default, don't block type on incompatibility
         return True
 
 
