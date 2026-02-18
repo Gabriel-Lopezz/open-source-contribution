@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import datetime
 from collections.abc import (
     Callable,
     Collection,
@@ -3683,6 +3684,51 @@ class MultiIndex(Index):
                 mi = self[loc]
         return loc, mi
 
+    def _expected_level_type(levelno: int) -> str:
+        lev = self.levels[levelno]
+        dt = getattr(lev, "dtype", None)
+        return str(dt) if dt is not None else type(lev).__name__
+
+    def _is_key_type_compatible(val, levelno: int) -> bool:
+        lev = self.levels[levelno]
+        dt = getattr(lev, "dtype", None)
+
+        # If we can't infer anything, don't block (avoid breaking object/mixed levels)
+        if dt is None:
+            return True
+
+        kind = getattr(dt, "kind", None)
+
+        # object levels: don't enforce type (too many valid mixes)
+        if kind == "O":
+            return True
+
+        # datetime64 levels
+        if kind == "M":
+            import datetime as _dt
+            return isinstance(val, (np.datetime64, _dt.datetime, _dt.date, pd.Timestamp, str))
+
+        # timedelta64 levels
+        if kind == "m":
+            import datetime as _dt
+            return isinstance(val, (np.timedelta64, _dt.timedelta, pd.Timedelta, str))
+
+        # numeric-ish levels
+        if kind in ("i", "u"):
+            return isinstance(val, (int, np.integer))
+        if kind == "f":
+            return isinstance(val, (float, int, np.floating, np.integer))
+        if kind == "b":
+            return isinstance(val, (bool, np.bool_))
+
+        # string-ish
+        if kind in ("U", "S"):
+            return isinstance(val, str)
+
+        # default: don't block
+        return True
+
+
     def _get_loc_level(self, key, level: int | list[int] = 0):
         """
         get_loc_level but with `level` known to be positional, not name-based.
@@ -3700,31 +3746,32 @@ class MultiIndex(Index):
                 new_index = new_index._drop_level_numbers([i])
 
             return new_index
-
-        if isinstance(level, (tuple, list)):
-            if len(key) != len(level):
-                raise AssertionError(
-                    "Key for location must have same length as number of levels"
+        
+        if isinstance(key, tuple):
+            for ind, val in enumerate(key):
+                if not _is_key_type_compatible(val, ind):
+                    raise TypeError(
+                        f"Error: Type mismatch at index level {ind}: "
+                        f"Expected {_expected_level_type(ind)}, "
+                        f"Got {type(val).__name__}"
+                    )
+        else:
+            if not _is_key_type_compatible(key, level):
+                raise TypeError(
+                    f"Error: Type mismatch at index level {level}: "
+                    f"Expected {_expected_level_type(level)}, "
+                    f"Got {type(key).__name__}"
                 )
-            result = None
-            for lev, k in zip(level, key, strict=True):
-                loc, new_index = self._get_loc_level(k, level=lev)
-                if isinstance(loc, slice):
-                    mask = np.zeros(len(self), dtype=bool)
-                    mask[loc] = True
-                    loc = mask
-                result = loc if result is None else result & loc
+                    try:
+                        # FIXME: we should be only dropping levels on which we are
+                        #  scalar-indexing
+                        mi = maybe_mi_droplevels(result, level)
+                    except ValueError:
+                        # droplevel failed because we tried to drop all levels,
+                        #  i.e. len(level) == self.nlevels
+                        mi = self[result]
 
-            try:
-                # FIXME: we should be only dropping levels on which we are
-                #  scalar-indexing
-                mi = maybe_mi_droplevels(result, level)
-            except ValueError:
-                # droplevel failed because we tried to drop all levels,
-                #  i.e. len(level) == self.nlevels
-                mi = self[result]
-
-            return result, mi
+                    return result, mi
 
         # kludge for #1796
         if isinstance(key, list):
